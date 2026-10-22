@@ -122,9 +122,17 @@ What changes with the pipeline:
 
 ### Is `StandardScaler` numerically identical to old `normalize=True`?
 
-Not exactly. Old `normalize=True` centered columns and scaled each to unit **L2 norm**; `StandardScaler` scales by **standard deviation**. For centered columns these differ by a factor of `sqrt(n_samples)`, which is why sklearn's warning says to compensate a *fixed* alpha with `alpha * sqrt(n_samples)`.
+Yes (up to floating-point rounding) under standard settings — and it's provable, not luck. Old `normalize=True` **centered each column first, then** scaled by the L2 norm of the centered column, `sqrt(sum((x - mean)**2))`. `StandardScaler` scales by the standard deviation, `sqrt(mean((x - mean)**2))`. Since both center, the two scalings differ by the *same global factor* `sqrt(n_samples)` for every column, and rescaling all features by a global constant is exactly cancelled by rescaling alpha. Algebra: fitting `Lasso(alpha')` on `X_std = sqrt(n) * X_l2scaled` and substituting `beta_std = beta / sqrt(n)` yields the old objective iff `alpha' = alpha * sqrt(n_samples)`. Same objective → same minimizer.
 
-However, **with CV-selected alpha the difference is absorbed automatically** — verified empirically on the Titanic data: old model, plain `StandardScaler`, and the `with_mean=False` recipe all produced identical raw-unit coefficients (max difference 0.000000), identical predictions, and identical R². The `sqrt(n)` compensation only matters when porting a manually-fixed alpha between old and new code.
+Verified empirically with a fixed, selection-active penalty (`Lasso(alpha=0.001)`, 3 of 6 features zeroed): the compensated pipeline `make_pipeline(StandardScaler(), Lasso(alpha=0.001 * sqrt(n)))` reproduced the old `normalize=True` coefficients with max difference 1.67e-16 (machine epsilon) and the identical selection boundary.
+
+With CV-selected alpha (e.g. `LassoLarsCV`) you don't even need the compensation: CV finds the equivalent alpha automatically in the new scaling. The compensation only matters when porting a manually-fixed alpha.
+
+Cases where exactness genuinely breaks:
+
+- `StandardScaler(with_mean=False)` (the recipe printed in sklearn's warning): without centering, scaling uses the uncentered second moment, which differs *per feature* — only approximate.
+- `fit_intercept=False`, or `sample_weight` (also flagged in the warning).
+- Different sklearn versions/solvers may differ in the last few digits.
 
 Simplest valid option: since normalization made no difference on this data anyway, plain `LassoLarsCV(cv=folder).fit(X, y)` (no scaling at all) is also future-proof.
 
